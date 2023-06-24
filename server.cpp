@@ -1,50 +1,97 @@
 #include <iostream>
 #include <cstring>
+#include <vector>
 #include <cstdlib>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <string>
-using namespace std;
+#include "RPC.cpp"
+#include "procedures.cpp"
 
-#define PORT 4000 
-#define BUFFER_SIZE 1024
-#define MESSAGE_SIZE 1024
+using namespace std;
+#define SERVER_PORT 9000 
+
+// Returs the current time formatted in "Day-Month-Year Hour:Minute:Second"
+string getTime()
+{
+  string str;
+  time_t timer;
+  char buffer[26];
+  struct tm* tm_info;
+
+  timer = time(nullptr);
+  tm_info = localtime(&timer);
+
+  strftime(buffer, 26, "%d-%m-%Y %H:%M:%S", tm_info);
+  for(int i{0}; buffer[i] != 0; i++)
+    str.push_back(buffer[i]);
+  return str;
+}
 
 void performRemoteProcedureCall(int clientSocket) {
-    char buffer[BUFFER_SIZE];
-    memset(buffer, 0, BUFFER_SIZE);
 
-    // Receive the RPC request from the client
-    int bytesRead = read(clientSocket, buffer, BUFFER_SIZE);
-    if (bytesRead < 0) {
-        perror("Error reading from socket");
-        close(clientSocket);
-        exit(1);
+  // Advertise the Services to the Client
+    RPCPacket services = RPCPacket::getServiceMessage();
+    services.sendPacket(clientSocket);
+
+    // Take the response from client.
+    RPCPacket response;
+    response.recvPacket(clientSocket);
+
+    // Check the authorization Token
+    if(!response.checkAuthorizationToken())
+    {
+      cout << getTime() << ": Invalid AuthorizationToken By Client " << clientSocket << '\n';
+      RPCPacket error{"Invalid AuthorizationToken"};
+      error.header.errorCode = 1;
+      error.sendPacket(clientSocket);
+      return;
     }
 
-    // Process the RPC request
-    // ... Add your custom RPC logic here ...
-    string response;
-    cout << "Enter the Message to Send to the User: ";
-    cin >> response;
 
-    // Send the RPC response back to the client
-    int bytesWritten = write(clientSocket, response.c_str(), response.length());
-    if (bytesWritten < 0) {
-        perror("Error writing to socket");
-        close(clientSocket);
-        exit(1);
+    // Execute the Procedure requested by the client.
+    int procedure = response.header.procedureNumber;
+    int error = 0;
+    string output;
+    switch(procedure)
+    {
+      case 1:
+        output = procedure1();
+        break;
+      case 2:
+        output = procedure2();
+        break;
+      case 3:
+        output = procedure3();
+        break;
+      case 4:
+        output = procedure4();
+        break;
+      default:
+        cout << getTime() << ": Invalid Procedure Invoked By Client: " << clientSocket << '\n';
+        output = "Invalid Procedure Number";
+        error = 2;
+        break;
     }
 
+    // Send the output of executed procedure to the client.
+    RPCPacket result{output};
+    result.header.messageType = 1;
+    result.header.errorCode = error;
+    result.sendPacket(clientSocket);
+
+    // Close the connection with the client.
     close(clientSocket);
+    cout << getTime() << ": Terminating Client Connection...\n";
+    return;
 }
 
 int main() {
     int serverSocket, clientSocket;
     struct sockaddr_in serverAddress, clientAddress;
 
-    // Create socket
+    // Create Server socket
     if ((serverSocket = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
         perror("Socket creation failed");
         exit(1);
@@ -53,9 +100,9 @@ int main() {
     // Prepare the server address structure
     serverAddress.sin_family = AF_INET;
     serverAddress.sin_addr.s_addr = INADDR_ANY;
-    serverAddress.sin_port = htons(PORT);
+    serverAddress.sin_port = htons(SERVER_PORT);
 
-    // Bind the socket to the specified address and port
+    // Bind the socket to the specified address and SERVER_PORT
     if (bind(serverSocket, (struct sockaddr*)&serverAddress, sizeof(serverAddress)) < 0) {
         perror("Socket binding failed");
         exit(1);
@@ -67,7 +114,7 @@ int main() {
         exit(1);
     }
 
-    std::cout << "RPC server started. Listening on port " << PORT << std::endl;
+    std::cout << getTime() << ": RPC server started. Listening on Server Port: " << SERVER_PORT << std::endl;
 
     while (true) {
         socklen_t clientAddressLength = sizeof(clientAddress);
@@ -78,12 +125,13 @@ int main() {
             exit(1);
         }
 
-        std::cout << "New client connection accepted" << std::endl;
+        std::cout << getTime() << ": New client connection accepted" << std::endl;
 
-        // Perform the remote procedure call
+        // Perform the remote procedure call 
         performRemoteProcedureCall(clientSocket);
     }
 
+    // Terminate the Server
     close(serverSocket);
     return 0;
 }
